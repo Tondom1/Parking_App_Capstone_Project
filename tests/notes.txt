@@ -1,0 +1,3 @@
+Grab picture from webcam with:
+
+$ streamer -s 1920x1080 -o test.jpeg
