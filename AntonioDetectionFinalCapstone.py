@@ -9,35 +9,37 @@ class parkingSpace:
         self.occupied = occupied
         
     def checkSpaceOccupancy(self, occupiedSpaces):
+        print(occupiedSpaces)
         for takenSpace in occupiedSpaces:
-            if self.id == takenSpace.id:
+            if self.id == takenSpace:
                 self.occupied = True
-                print(self.id, "is occupied")
+                #print(self.id, "is occupied")
             else:
                 self.occupied = False
-                print(self.id, "not occupied")
+                #print(self.id, "not occupied")
 
 
 # Load YOLO model
-model = YOLO("best.pt")   # custom trained model for parking lot detection
+model = YOLO("/home/evan/school/capstone/train12-new/weights/best.pt")   # custom trained model for parking lot detection
 #model.predict(source=4, show=False, conf=0.5) # use webcam as source
-videoCap = cv2.VideoCapture(0)
-time.sleep(1)
+videoCap = cv2.VideoCapture(4)
+time.sleep(5)
 print(videoCap.isOpened())
-videoCap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
-videoCap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
+videoCap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+videoCap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
 isCalibrated = False
 parkingSpaces = []
 occupiedSpaces = []
-interval = 3 # seconds between frame captures
+interval = 0 # seconds between frame captures
 lastCapturetime = 0
+confidenceThreshold = 0.5
 
 print("Starting camera...")
 
 def spaceBeingOccupied(x, y, s): #Will return the ID of the space being occupied if there is a car present
     x1, y1, x2, y2 = s.coords
-    if x1 < x < x2 and y1 < y < y2:
+    if x1 < x < x2 and y2 < y < y1:
         return s.id
     else:
         return None
@@ -79,7 +81,7 @@ def calibrateParkingLines(frame):
     #Calibration is done by pulling detected objects, checking if parking lines, then capturing their locations
     parkingLines = []
     #detectedObjects = model.track(frame, stream=True)
-    detectedObjects = model.predict(frame, stream=True, imgsz=(800,600), conf=0.5)
+    detectedObjects = model.predict(frame, stream=True, imgsz=1024, conf=confidenceThreshold)
 
     #Go through each detected object and retrieve appropriate info needed
     for objectInFrame in detectedObjects:
@@ -88,7 +90,7 @@ def calibrateParkingLines(frame):
         for box in objectInFrame.boxes:
             boxType = box.cls
             confidence = float(box.conf[0])
-            if confidence > 0.5:
+            if confidence > confidenceThreshold:
                 if boxType == 1:
                     #x1,y1,x2,y2 = box.xyxy #returns bounding box coordinates
                     xyList = box.xyxy.tolist()
@@ -144,7 +146,7 @@ def drawParkingSpaces(frame):
  
 def detectCars(frame):
     global parkingSpaces
-    global occupiedSpaces
+    takenSpaces = []
     detectedObjects = model.predict(frame, stream=True)
     
     #boxType = box.cls
@@ -155,7 +157,7 @@ def detectCars(frame):
             boxType = box.cls
             confidence = float(box.conf[0])
             if boxType == 0:
-                if confidence > 0.4:
+                if confidence > confidenceThreshold:
                     cls = int(boxType[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cx = (x1 + x2) // 2
@@ -172,9 +174,11 @@ def detectCars(frame):
                 # Check if the toy car is inside a space
                 # if boxType == 0:
                 for s in parkingSpaces:
+                    # TODO - fix crash here when no cars are detected
                     space_id = spaceBeingOccupied(cx, cy, s)
                     if space_id:
-                        occupiedSpaces.append(space_id)
+                        takenSpaces.append(space_id)
+    return takenSpaces
 
 # print("Frame width = ", int(videoCap.get(cv2.CAP_PROP_FRAME_WIDTH)))
 # print("Frame height = ", int(videoCap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
@@ -193,7 +197,7 @@ while True:
             calibrateParkingLines(frame)
         else:
             drawParkingSpaces(frame)
-            detectCars(frame)
+            occupiedSpaces = detectCars(frame)
             for space in parkingSpaces:
                 space.checkSpaceOccupancy(occupiedSpaces)
            # print("Woo, calibrated")
@@ -219,7 +223,7 @@ cv2.destroyAllWindows()
 #             print("No frame captured. Exiting.")
 #             break
 
-#     #Check if calibration is needed on this frame
+#     #Check if calibration is needed on this framevideoCap
 #         #Calbrate
 
 #     if isCalibrated == False:
