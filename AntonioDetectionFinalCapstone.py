@@ -1,18 +1,21 @@
 from ultralytics import YOLO
 import time
 import cv2
+import databaseFunctions
 
 class parkingSpace:
-    def __init__(self, id, coords, occupied):
+    def __init__(self, id, coords, occupied, handicap):
         self.id = id
         self.coords = coords
         self.occupied = occupied
+        self.handicap = handicap
         
     def checkSpaceOccupancy(self, occupiedSpaces):
-        print(occupiedSpaces)
+        #print(occupiedSpaces)
         for takenSpace in occupiedSpaces:
             if self.id == takenSpace:
                 self.occupied = True
+                return()
                 #print(self.id, "is occupied")
             else:
                 self.occupied = False
@@ -23,23 +26,23 @@ class parkingSpace:
 model = YOLO("/home/evan/school/capstone/train12-new/weights/best.pt")   # custom trained model for parking lot detection
 #model.predict(source=4, show=False, conf=0.5) # use webcam as source
 videoCap = cv2.VideoCapture(4)
-time.sleep(5)
+#time.sleep(5)
 print(videoCap.isOpened())
 videoCap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
 videoCap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-
+#videoCap.set(cv2.CAP_PROP_FPS, 2)
 isCalibrated = False
 parkingSpaces = []
 occupiedSpaces = []
 interval = 0 # seconds between frame captures
 lastCapturetime = 0
-confidenceThreshold = 0.5
+confidenceThreshold = 0.4
 
 print("Starting camera...")
 
 def spaceBeingOccupied(x, y, s): #Will return the ID of the space being occupied if there is a car present
     x1, y1, x2, y2 = s.coords
-    if x1 < x < x2 and y2 < y < y1:
+    if x1 < x < x2 and y2 > y > y1:
         return s.id
     else:
         return None
@@ -80,6 +83,9 @@ def calibrateParkingLines(frame):
     global parkingSpaces
     #Calibration is done by pulling detected objects, checking if parking lines, then capturing their locations
     parkingLines = []
+    isHandicap = False
+    spaceIsHandicap = False
+
     #detectedObjects = model.track(frame, stream=True)
     detectedObjects = model.predict(frame, stream=True, imgsz=1024, conf=confidenceThreshold)
 
@@ -91,12 +97,18 @@ def calibrateParkingLines(frame):
             boxType = box.cls
             confidence = float(box.conf[0])
             if confidence > confidenceThreshold:
-                if boxType == 1:
+                if boxType == 1 or 2:
                     #x1,y1,x2,y2 = box.xyxy #returns bounding box coordinates
                     xyList = box.xyxy.tolist()
                     x1,y1,x2,y2 = int(xyList[0][0]),int(xyList[0][1]),int(xyList[0][2]),int(xyList[0][3])
 
-                    parkingLines.append((x1,y1,x2,y2))
+                    
+                    if boxType == 2:
+                        isHandicap = True
+                    else:
+                        isHandicap = False
+                    
+                    parkingLines.append((x1,y1,x2,y2,isHandicap))
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2) #Draw rectangle around parking line MAY NEED TO REMOVE
                     cv2.putText(frame, "Parking Line", 
                                 (x1, max(y1 - 10, 20)),
@@ -106,28 +118,34 @@ def calibrateParkingLines(frame):
     #Now that we have all parking lines, we can define parking spaces by their rows
     if len(parkingLines) >= 2: #if there are at least 2 parking lines detected
         allRows = groupParkingLinesByRow(parkingLines) #Group parking lines into rows based on y coordinate proximity
-        idCount = 0
+        idCount = 1
         for row in allRows: #go through each row of parking lines
             row.sort(key=lambda r: r[0]) #Sort parking lines in row by x coordinate
             for i in range(len(row) - 1):
                 for x in range(len(row[i])):
-                    firstX1, firstY1, firstX2, firstY2 = row[i] #Return leftmost parking line coordinates
-                    secondX1, secondY1, secondX2, secondY2 = row[i+1] #Return next parking line coordinates
+                    firstX1, firstY1, firstX2, firstY2, firstIsHandicap = row[i] #Return leftmost parking line coordinates
+                    secondX1, secondY1, secondX2, secondY2, SecondIsHandicap = row[i+1] #Return next parking line coordinates
                     if row[i][x] < 300: #check which row it is in in order to calculate correct space coords
-                        spaceX1 = min(firstX1, firstX2)
-                        spaceX2 = max(secondX1, secondX2)
-                        spaceY1 = max(firstY1,firstY2)
-                        spaceY2 = min(secondY1, secondY2)
+                        spaceX1 = max(firstX1, firstX2)
+                        spaceX2 = min(secondX1, secondX2)
+                        spaceY1 = min(firstY1,firstY2)
+                        spaceY2 = max(secondY1, secondY2)
                     else:
-                        spaceX1 = min(firstX1, firstX2)
-                        spaceX2 = max(secondX1, secondX2)
-                        spaceY1 = max(firstY1,firstY2)
-                        spaceY2 = min(secondY1, secondY2)
+                        spaceX1 = max(firstX1, firstX2)
+                        spaceX2 = min(secondX1, secondX2)
+                        spaceY1 = min(firstY1,firstY2)
+                        spaceY2 = max(secondY1, secondY2)
+
+                    if firstIsHandicap and SecondIsHandicap:
+                        spaceIsHandicap = True
+                    else:
+                        spaceIsHandicap = False
 
                 spaceCoords = (spaceX1,spaceY1, spaceX2, spaceY2) #Define parking space coordinates based on two parking lines
-                parkingSpaces.append(parkingSpace(id=idCount, coords=spaceCoords, occupied = False)) #Create parking space object and add to list with unique ID
+                parkingSpaces.append(parkingSpace(id=idCount, coords=spaceCoords, occupied = False, handicap = spaceIsHandicap)) #Create parking space object and add to list with unique ID
                 idCount += 1 #increase ID count for next parking space
         isCalibrated = True
+        databaseFunctions.setHandicap(parkingSpaces)
         print("Calibration complete.", len(parkingSpaces), "parking spaces defined.")
     else:
         print("Not enough parking lines detected for calibration.")
@@ -148,6 +166,7 @@ def detectCars(frame):
     global parkingSpaces
     takenSpaces = []
     detectedObjects = model.predict(frame, stream=True)
+  
     
     #boxType = box.cls
     #confidence = float(box.conf[0])
@@ -173,11 +192,11 @@ def detectCars(frame):
 
                 # Check if the toy car is inside a space
                 # if boxType == 0:
-                for s in parkingSpaces:
-                    # TODO - fix crash here when no cars are detected
-                    space_id = spaceBeingOccupied(cx, cy, s)
-                    if space_id:
-                        takenSpaces.append(space_id)
+                    for s in parkingSpaces:
+                        # TODO - fix crash here when no cars are detected
+                        space_id = spaceBeingOccupied(cx, cy, s)
+                        if space_id:
+                            takenSpaces.append(space_id)
     return takenSpaces
 
 # print("Frame width = ", int(videoCap.get(cv2.CAP_PROP_FRAME_WIDTH)))
@@ -198,12 +217,17 @@ while True:
         else:
             drawParkingSpaces(frame)
             occupiedSpaces = detectCars(frame)
+            print(occupiedSpaces)
             for space in parkingSpaces:
                 space.checkSpaceOccupancy(occupiedSpaces)
            # print("Woo, calibrated")
+            databaseFunctions.processList(parkingSpaces)
     cv2.imshow("image", frame)
     if cv2.waitKey(1) == ord('q'):
-            break
+            #break
+            parkingSpaces = []
+            isCalibrated = False
+    
         
         
 
